@@ -54,54 +54,48 @@ class SensorCalibrationAnalyzer:
             }
         }
     
-    def calcular_tolerancia_transmision(self, rango_calibrado, datos_calibracion, clase_precision='estandar'):
+    def calcular_tolerancia_transmision(self, rango_calibrado, datos_calibracion, clase_precision='estandar', mostrar_detalles=False):
         """
         Calcular la tolerancia de transmisión basada en datos de calibración.
         
         :param rango_calibrado: Rango de calibración (tupla de min y max)
         :param datos_calibracion: DataFrame con datos de calibración
-        :param clase_precision: Nivel de precisión del instrumento
-        :return: Diccionario de métricas de tolerancia
+        :param clase_precision: Nivel de precisión del instrumento ('alta', 'estandar' o 'baja')
+        :param mostrar_detalles: Si True, se incluirán cálculos intermedios en la salida.
+        :return: Diccionario de métricas y, opcionalmente, los detalles de cálculo.
         """
-        # Validar datos de calibración
         if datos_calibracion.empty:
             raise ValueError("No se proporcionaron datos de calibración")
         
-        # Extraer puntos de calibración
+        # Extraer puntos de calibración y errores
         puntos_calibracion = datos_calibracion['valor_medido']
         errores = datos_calibracion['error']
         
-        # Cálculo de estadísticas de error
+        # Estadísticas de error
         error_medio = np.mean(errores)
         error_maximo = np.max(np.abs(errores))
         desviacion_estandar = np.std(errores)
         
-        # Cálculo de tolerancia base
-        params = self.parametros_normativos.get(self.tipo_sensor, 
-                                                self.parametros_normativos['temperatura'])
+        # Cálculo de parámetros
+        params = self.parametros_normativos.get(self.tipo_sensor, self.parametros_normativos['temperatura'])
         rango_min, rango_max = rango_calibrado
         rango_medicion = rango_max - rango_min
         
-        # Parámetros de precisión según normas
         precision_base = params['clase_precision'].get(clase_precision, 0.5)
-        
-        # Cálculo de tolerancia de transmisión
         factor_base = params['factor_base_tolerancia']
         factor_compensacion = params['factor_compensacion'] * max(abs(rango_min), abs(rango_max))
+        
         tolerancia_transmision = factor_base + factor_compensacion
         
-        # Cálculo de error máximo permitido en unidades físicas
         error_maximo_permitido_porcentual = precision_base
         error_maximo_permitido_unidades = (error_maximo_permitido_porcentual / 100) * rango_medicion
         
-        # Porcentaje de tolerancia
         porcentaje_tolerancia = (tolerancia_transmision / rango_medicion) * 100
         
-        # Cálculo de incertidumbre
         incertidumbre_combinada = math.sqrt(desviacion_estandar**2)
-        incertidumbre_expandida = 2 * incertidumbre_combinada  # Factor de cobertura k=2
+        incertidumbre_expandida = 2 * incertidumbre_combinada  # k = 2
         
-        return {
+        resultados = {
             'tipo_sensor': self.tipo_sensor,
             'unidades': self.unidades,
             'rango_calibrado': f"{rango_min} - {rango_max} {self.unidades}",
@@ -116,8 +110,26 @@ class SensorCalibrationAnalyzer:
             'incertidumbre_combinada': round(incertidumbre_combinada, 4),
             'incertidumbre_expandida': round(incertidumbre_expandida, 4)
         }
+        
+        if mostrar_detalles:
+            detalles = {
+                'puntos_calibracion': list(puntos_calibracion),
+                'errores': list(errores),
+                'error_medio': round(error_medio, 4),
+                'error_maximo': round(error_maximo, 4),
+                'desviacion_estandar': round(desviacion_estandar, 4),
+                'precision_base': precision_base,
+                'factor_base': factor_base,
+                'factor_compensacion': factor_compensacion,
+                'rango_medicion': rango_medicion,
+                'error_maximo_permitido_unidades': round(error_maximo_permitido_unidades, 4),
+                'porcentaje_tolerancia': round(porcentaje_tolerancia, 2)
+            }
+            resultados['detalles'] = detalles
+        
+        return resultados
 
-# Interfaz de usuario en Streamlit
+# Interfaz en Streamlit
 
 st.title("Analizador de Tolerancia de Transmisión de Sensores")
 
@@ -152,6 +164,9 @@ st.write("Ingrese los datos de calibración en el siguiente formato:")
 st.write("**valor_medido,error** (separados por coma) y una línea por cada dato.")
 calibracion_text = st.text_area("Datos de calibración", height=150, placeholder="Ejemplo:\n25.0,0.2\n30.0,-0.1")
 
+# Opción para mostrar cálculos intermedios
+mostrar_detalles = st.checkbox("Mostrar cálculos intermedios")
+
 if st.button("Calcular Tolerancia de Transmisión"):
     if not calibracion_text.strip():
         st.error("Por favor, ingrese los datos de calibración.")
@@ -173,11 +188,19 @@ if st.button("Calcular Tolerancia de Transmisión"):
                 df_calibracion = pd.DataFrame(datos)
                 # Crear instancia del analizador
                 analizador = SensorCalibrationAnalyzer(tipo_sensor, unidades)
-                # Calcular tolerancia de transmisión
-                resultados = analizador.calcular_tolerancia_transmision((rango_min, rango_max), df_calibracion, clase_precision)
+                # Calcular tolerancia de transmisión, pasando la opción de mostrar detalles
+                resultados = analizador.calcular_tolerancia_transmision((rango_min, rango_max), df_calibracion, clase_precision, mostrar_detalles)
                 
                 st.subheader("Resultados de Análisis de Tolerancia")
                 for clave, valor in resultados.items():
-                    st.write(f"**{clave.replace('_',' ').capitalize()}**: {valor}")
+                    if clave != "detalles":
+                        st.write(f"**{clave.replace('_',' ').capitalize()}**: {valor}")
+                
+                # Mostrar detalles intermedios si se solicitó
+                if mostrar_detalles and "detalles" in resultados:
+                    with st.expander("Ver cálculos intermedios"):
+                        for det_key, det_val in resultados["detalles"].items():
+                            st.write(f"**{det_key.replace('_',' ').capitalize()}**: {det_val}")
         except Exception as e:
             st.error(f"Error en el análisis: {e}")
+
