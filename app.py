@@ -4,7 +4,10 @@ import math
 import pandas as pd
 
 def calcular_tolerancia_sensor(rango_min, rango_max, sensor_type, tolerancia_sensor_input=None):
-    # Para temperatura se calcula automáticamente; para otros se usa el valor ingresado
+    """
+    Para sensores de temperatura se calcula automáticamente;
+    para otros sensores se usa el valor ingresado por el usuario.
+    """
     if sensor_type == "temperatura":
         return 0.15 + 0.0020 * max(abs(rango_min), abs(rango_max))
     else:
@@ -12,25 +15,39 @@ def calcular_tolerancia_sensor(rango_min, rango_max, sensor_type, tolerancia_sen
 
 def calcular_tolerancia_metrologica(errores, incertidumbre_patron, rango_calibrado,
                                     tolerancia_transmisor, tolerancia_plc, tolerancia_pantalla,
-                                    sensor_type, tolerancia_sensor_input=None):
-    # Cálculo de la desviación estándar (usando ddof=1 para muestras)
+                                    sensor_type, tolerancia_sensor_input=None, unidad="°C"):
+    """
+    Calcula la tolerancia metrológica combinando la incertidumbre estadística (de los errores)
+    con la incertidumbre del patrón, y combina en cuadratura las tolerancias de cada componente.
+    
+    Parámetros:
+      - errores: array de errores medidos.
+      - incertidumbre_patron: incertidumbre del patrón en la unidad del sensor.
+      - rango_calibrado: tupla (rango_min, rango_max).
+      - tolerancia_transmisor, tolerancia_plc, tolerancia_pantalla: tolerancias (en la unidad definida).
+      - sensor_type: tipo de sensor (ej. "temperatura", "presion", "caudal", "velocidad").
+      - tolerancia_sensor_input: tolerancia del sensor ingresada por el usuario (para sensores distintos a temperatura).
+      - unidad: unidad de medida a mostrar en los resultados.
+    
+    Retorna un diccionario con:
+      - Tolerancia basada en incertidumbre expandida
+      - Tolerancia con ajuste práctico (se suma 0.05)
+      - Tolerancia en porcentaje del rango calibrado
+      - Tolerancia total considerando todos los componentes (combinación en cuadratura)
+    """
     desviacion_estandar = np.std(errores, ddof=1)
-    # Incertidumbre combinada según GUM
     incertidumbre_combinada = math.sqrt(desviacion_estandar**2 + incertidumbre_patron**2)
-    # Incertidumbre expandida (k=2 ~95% de confianza)
     incertidumbre_expandida = 2 * incertidumbre_combinada
     tolerancia_estricta = incertidumbre_expandida
-    # Ajuste práctico: se suma un margen fijo de 0.05 °C
     tolerancia_practica = round(incertidumbre_expandida + 0.05, 2)
     
     rango_min, rango_max = rango_calibrado
     span = abs(rango_max - rango_min)
     tolerancia_porcentaje = (incertidumbre_expandida / span) * 100
-    
-    # Tolerancia del sensor: calculada automáticamente para temperatura o ingresada para otros
+
+    # Obtener la tolerancia del sensor
     tolerancia_sensor = calcular_tolerancia_sensor(rango_min, rango_max, sensor_type, tolerancia_sensor_input)
     
-    # Combinación en cuadratura de todas las tolerancias de la cadena
     tolerancia_total = math.sqrt(
         tolerancia_sensor**2 +
         tolerancia_transmisor**2 +
@@ -39,16 +56,16 @@ def calcular_tolerancia_metrologica(errores, incertidumbre_patron, rango_calibra
     )
     
     return {
-        "Tolerancia basada en incertidumbre expandida (°C)": round(tolerancia_estricta, 4),
-        "Tolerancia con ajuste práctico (°C)": tolerancia_practica,
+        "Tolerancia basada en incertidumbre expandida (" + unidad + ")": round(tolerancia_estricta, 4),
+        "Tolerancia con ajuste práctico (" + unidad + ")": tolerancia_practica,
         "Tolerancia en porcentaje del rango calibrado (%)": round(tolerancia_porcentaje, 2),
-        "Tolerancia total considerando todos los componentes (°C)": round(tolerancia_total, 2)
+        "Tolerancia total considerando todos los componentes (" + unidad + ")": round(tolerancia_total, 2)
     }
 
 # --- Interfaz en Streamlit ---
 st.title("Analizador Metrológico de Tolerancia de Transmisión de Sensores")
 
-# Selección de tipo de sensor
+# Selección de tipo de sensor y definición de la unidad
 sensor_options = {
     "Temperatura": "temperatura",
     "Presión": "presion",
@@ -57,7 +74,11 @@ sensor_options = {
 }
 sensor_elegido = st.selectbox("Seleccione el tipo de sensor", list(sensor_options.keys()))
 sensor_type = sensor_options[sensor_elegido]
-unidad = "°C" if sensor_type == "temperatura" else ("bar" if sensor_type == "presion" else ("m³/h" if sensor_type == "caudal" else "rpm"))
+unidad = "°C" if sensor_type == "temperatura" else (
+    "bar" if sensor_type == "presion" else (
+        "m³/h" if sensor_type == "caudal" else "rpm"
+    )
+)
 
 # Rango de calibración
 st.subheader("Rango de Calibración")
@@ -71,14 +92,14 @@ calibracion_text = st.text_area("Datos de calibración", height=150, placeholder
 
 # Parámetros metrológicos adicionales
 st.subheader("Parámetros Metrológicos Adicionales")
-incertidumbre_patron = st.number_input("Incertidumbre del patrón (°C)", value=0.1, step=0.01)
-tolerancia_transmisor = st.number_input("Tolerancia del transmisor (°C)", value=0.2, step=0.01)
-tolerancia_plc = st.number_input("Tolerancia de la tarjeta PLC (°C)", value=0.1, step=0.01)
-tolerancia_pantalla = st.number_input("Tolerancia de la pantalla (°C)", value=0.05, step=0.01)
+incertidumbre_patron = st.number_input(f"Incertidumbre del patrón ({unidad})", value=0.1, step=0.01)
+tolerancia_transmisor = st.number_input(f"Tolerancia del transmisor ({unidad})", value=0.2, step=0.01)
+tolerancia_plc = st.number_input(f"Tolerancia de la tarjeta PLC ({unidad})", value=0.1, step=0.01)
+tolerancia_pantalla = st.number_input(f"Tolerancia de la pantalla ({unidad})", value=0.05, step=0.01)
 
 # Para sensores distintos de temperatura, se solicita la tolerancia del sensor como constante
 if sensor_type != "temperatura":
-    tolerancia_sensor_input = st.number_input("Ingrese la tolerancia del sensor (constante, °C)", value=0.5, step=0.01)
+    tolerancia_sensor_input = st.number_input(f"Ingrese la tolerancia del sensor (constante, {unidad})", value=0.5, step=0.01)
 else:
     tolerancia_sensor_input = None
 
@@ -108,9 +129,9 @@ if st.button("Calcular Tolerancia de Transmisión"):
                 tolerancia_plc=tolerancia_plc,
                 tolerancia_pantalla=tolerancia_pantalla,
                 sensor_type=sensor_type,
-                tolerancia_sensor_input=tolerancia_sensor_input
+                tolerancia_sensor_input=tolerancia_sensor_input,
+                unidad=unidad
             )
             st.subheader("Resultados Metrológicos")
             for clave, valor in resultados.items():
                 st.write(f"**{clave}**: {valor}")
-
