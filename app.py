@@ -3,18 +3,86 @@ import numpy as np
 import math
 import pandas as pd
 
+# --- Funciones para el cálculo metrológico ---
+def calcular_tolerancia_sensor(rango_min, rango_max):
+    """
+    Calcula la tolerancia del sensor (en °C) usando un modelo similar
+    al del segundo código, considerando la temperatura máxima dentro del rango.
+    """
+    temperatura_maxima = max(abs(rango_min), abs(rango_max))
+    return 0.15 + 0.0020 * temperatura_maxima
+
+def calcular_tolerancia_metrologica(errores, incertidumbre_patron, rango_calibrado,
+                                    tolerancia_transmisor, tolerancia_plc, tolerancia_pantalla,
+                                    sensor_type):
+    """
+    Realiza el cálculo metrológico:
+      - Combina la incertidumbre de los errores (desviación estándar) con la incertidumbre del patrón.
+      - Calcula la incertidumbre expandida (k=2).
+      - Aplica un ajuste práctico (se suma 0.05°C).
+      - Calcula la tolerancia en porcentaje del rango.
+      - Combina en cuadratura las tolerancias de los componentes: sensor, transmisor, PLC y pantalla.
+    
+    :param errores: Lista o array de errores medidos.
+    :param incertidumbre_patron: Incertidumbre del patrón (°C).
+    :param rango_calibrado: Tuple (rango_min, rango_max).
+    :param tolerancia_transmisor: Tolerancia del transmisor (°C).
+    :param tolerancia_plc: Tolerancia de la tarjeta PLC (°C).
+    :param tolerancia_pantalla: Tolerancia de la pantalla (°C).
+    :param sensor_type: Tipo de sensor (para calcular la tolerancia del sensor automáticamente en temperatura).
+    :return: Diccionario con los resultados metrológicos.
+    """
+    # Desviación estándar (con ddof=1 para muestra)
+    desviacion_estandar = np.std(errores, ddof=1)
+    # Incertidumbre combinada (GUM): combina la incertidumbre del patrón y la desviación de la calibración
+    incertidumbre_combinada = math.sqrt(desviacion_estandar**2 + incertidumbre_patron**2)
+    # Incertidumbre expandida (k=2, ~95% de confianza)
+    incertidumbre_expandida = 2 * incertidumbre_combinada
+    # Tolerancia estricta basada en la incertidumbre expandida
+    tolerancia_estricta = incertidumbre_expandida
+    # Ajuste práctico (agregando 0.05°C)
+    tolerancia_practica = round(incertidumbre_expandida + 0.05, 2)
+    
+    # Rango de calibración (span)
+    rango_min, rango_max = rango_calibrado
+    span = abs(rango_max - rango_min)
+    tolerancia_porcentaje = (incertidumbre_expandida / span) * 100
+
+    # Calcular la tolerancia del sensor:
+    if sensor_type == 'temperatura':
+        tolerancia_sensor = calcular_tolerancia_sensor(rango_min, rango_max)
+    else:
+        # Para otros tipos, se podría solicitar como parámetro; aquí se usa un valor por defecto
+        tolerancia_sensor = 0.5
+
+    # Tolerancia total considerando todos los componentes (en cuadratura)
+    tolerancia_total = math.sqrt(
+        tolerancia_sensor**2 +
+        tolerancia_transmisor**2 +
+        tolerancia_plc**2 +
+        tolerancia_pantalla**2
+    )
+    
+    return {
+        "Tolerancia basada en incertidumbre expandida (°C)": round(tolerancia_estricta, 4),
+        "Tolerancia con ajuste práctico (°C)": tolerancia_practica,
+        "Tolerancia en porcentaje del rango calibrado (%)": round(tolerancia_porcentaje, 2),
+        "Tolerancia total considerando todos los componentes (°C)": round(tolerancia_total, 2)
+    }
+
+# --- Clase que integra el cálculo normativo ---
 class SensorCalibrationAnalyzer:
     def __init__(self, tipo_sensor, unidades):
         """
-        Inicializar analizador de calibración de sensores.
+        Inicializar analizador de calibración de sensores con enfoque normativo.
         
-        :param tipo_sensor: Tipo de sensor 
-        :param unidades: Unidades de medida del sensor
+        :param tipo_sensor: Tipo de sensor (ej. 'temperatura')
+        :param unidades: Unidades de medida del sensor (ej. '°C')
         """
         self.tipo_sensor = tipo_sensor
         self.unidades = unidades
         
-        # Configuraciones según normas internacionales
+        # Configuraciones según normas internacionales (parámetros normativos)
         self.parametros_normativos = {
             'temperatura': {
                 'clase_precision': {
@@ -56,27 +124,27 @@ class SensorCalibrationAnalyzer:
     
     def calcular_tolerancia_transmision(self, rango_calibrado, datos_calibracion, clase_precision='estandar', mostrar_detalles=False):
         """
-        Calcular la tolerancia de transmisión basada en datos de calibración.
+        Calcular la tolerancia de transmisión basada en datos de calibración (enfoque normativo).
         
         :param rango_calibrado: Rango de calibración (tupla de min y max)
-        :param datos_calibracion: DataFrame con datos de calibración
+        :param datos_calibracion: DataFrame con datos de calibración (columnas 'valor_medido' y 'error')
         :param clase_precision: Nivel de precisión del instrumento ('alta', 'estandar' o 'baja')
-        :param mostrar_detalles: Si True, se incluirán cálculos intermedios en la salida.
-        :return: Diccionario de métricas y, opcionalmente, los detalles de cálculo.
+        :param mostrar_detalles: Si True, se agregan cálculos intermedios en la salida.
+        :return: Diccionario con resultados y, opcionalmente, detalles intermedios.
         """
         if datos_calibracion.empty:
             raise ValueError("No se proporcionaron datos de calibración")
         
-        # Extraer puntos de calibración y errores
+        # Extraer datos
         puntos_calibracion = datos_calibracion['valor_medido']
         errores = datos_calibracion['error']
         
-        # Estadísticas de error
+        # Estadísticas
         error_medio = np.mean(errores)
         error_maximo = np.max(np.abs(errores))
         desviacion_estandar = np.std(errores)
         
-        # Cálculo de parámetros
+        # Parámetros normativos
         params = self.parametros_normativos.get(self.tipo_sensor, self.parametros_normativos['temperatura'])
         rango_min, rango_max = rango_calibrado
         rango_medicion = rango_max - rango_min
@@ -89,7 +157,6 @@ class SensorCalibrationAnalyzer:
         
         error_maximo_permitido_porcentual = precision_base
         error_maximo_permitido_unidades = (error_maximo_permitido_porcentual / 100) * rango_medicion
-        
         porcentaje_tolerancia = (tolerancia_transmision / rango_medicion) * 100
         
         incertidumbre_combinada = math.sqrt(desviacion_estandar**2)
@@ -129,9 +196,8 @@ class SensorCalibrationAnalyzer:
         
         return resultados
 
-# Interfaz en Streamlit
-
-st.title("Analizador de Tolerancia de Transmisión de Sensores")
+# --- Interfaz en Streamlit ---
+st.title("Analizador de Tolerancia de Transmisión de Sensores (Integrado)")
 
 # Selección de tipo de sensor
 sensor_options = {
@@ -160,18 +226,25 @@ clase_precision = precision_map[clase_precision_elegida]
 
 # Ingreso de datos de calibración
 st.subheader("Datos de Calibración")
-st.write("Ingrese los datos de calibración en el siguiente formato:")
-st.write("**valor_medido,error** (separados por coma) y una línea por cada dato.")
+st.write("Ingrese los datos en el formato: **valor_medido,error** (una línea por dato)")
 calibracion_text = st.text_area("Datos de calibración", height=150, placeholder="Ejemplo:\n25.0,0.2\n30.0,-0.1")
 
-# Opción para mostrar cálculos intermedios
-mostrar_detalles = st.checkbox("Mostrar cálculos intermedios")
+# Parámetros adicionales para el cálculo metrológico
+st.subheader("Parámetros Metrológicos Adicionales")
+incertidumbre_patron = st.number_input("Incertidumbre del patrón (°C)", value=0.1, step=0.01)
+tolerancia_transmisor = st.number_input("Tolerancia del transmisor (°C)", value=0.2, step=0.01)
+tolerancia_plc = st.number_input("Tolerancia de la tarjeta PLC (°C)", value=0.1, step=0.01)
+tolerancia_pantalla = st.number_input("Tolerancia de la pantalla (°C)", value=0.05, step=0.01)
+
+# Opción para mostrar cálculos intermedios en el método normativo
+mostrar_detalles = st.checkbox("Mostrar cálculos intermedios (Normativo)")
 
 if st.button("Calcular Tolerancia de Transmisión"):
     if not calibracion_text.strip():
         st.error("Por favor, ingrese los datos de calibración.")
     else:
         try:
+            # Procesar datos de calibración
             datos = []
             for linea in calibracion_text.splitlines():
                 linea = linea.strip()
@@ -186,21 +259,37 @@ if st.button("Calcular Tolerancia de Transmisión"):
                 st.error("No se procesaron datos válidos.")
             else:
                 df_calibracion = pd.DataFrame(datos)
-                # Crear instancia del analizador
-                analizador = SensorCalibrationAnalyzer(tipo_sensor, unidades)
-                # Calcular tolerancia de transmisión, pasando la opción de mostrar detalles
-                resultados = analizador.calcular_tolerancia_transmision((rango_min, rango_max), df_calibracion, clase_precision, mostrar_detalles)
                 
-                st.subheader("Resultados de Análisis de Tolerancia")
-                for clave, valor in resultados.items():
+                # Cálculo normativo
+                analizador_normativo = SensorCalibrationAnalyzer(tipo_sensor, unidades)
+                resultados_normativos = analizador_normativo.calcular_tolerancia_transmision(
+                    (rango_min, rango_max), df_calibracion, clase_precision, mostrar_detalles
+                )
+                
+                # Cálculo metrológico: usamos la lista de errores de los datos
+                resultados_metrologicos = calcular_tolerancia_metrologica(
+                    errores = df_calibracion['error'].to_numpy(),
+                    incertidumbre_patron = incertidumbre_patron,
+                    rango_calibrado = (rango_min, rango_max),
+                    tolerancia_transmisor = tolerancia_transmisor,
+                    tolerancia_plc = tolerancia_plc,
+                    tolerancia_pantalla = tolerancia_pantalla,
+                    sensor_type = tipo_sensor
+                )
+                
+                st.subheader("Resultados Normativos")
+                for clave, valor in resultados_normativos.items():
                     if clave != "detalles":
                         st.write(f"**{clave.replace('_',' ').capitalize()}**: {valor}")
-                
-                # Mostrar detalles intermedios si se solicitó
-                if mostrar_detalles and "detalles" in resultados:
-                    with st.expander("Ver cálculos intermedios"):
-                        for det_key, det_val in resultados["detalles"].items():
+                if mostrar_detalles and "detalles" in resultados_normativos:
+                    with st.expander("Ver cálculos intermedios (Normativo)"):
+                        for det_key, det_val in resultados_normativos["detalles"].items():
                             st.write(f"**{det_key.replace('_',' ').capitalize()}**: {det_val}")
+                
+                st.subheader("Resultados Metrológicos")
+                for clave, valor in resultados_metrologicos.items():
+                    st.write(f"**{clave}**: {valor}")
+                    
         except Exception as e:
             st.error(f"Error en el análisis: {e}")
 
